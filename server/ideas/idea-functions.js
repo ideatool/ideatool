@@ -1,8 +1,9 @@
 var Comment = require('../models/comments');
 var Idea = require('../models/ideas');
 var User = require('../models/users');
+var Vote = require('../models/votes');
 var slackPost = require('./slackPost');
-//var request = require('request');
+var request = require('request');
 
 function getIdeas (req, res) {
   req.headers.query = req.headers.query || "";
@@ -75,8 +76,6 @@ function getIdeas (req, res) {
 } // end getIdeas
 
 function createIdea (req, res) {
-  console.log('in createIdea, req: ', req);
-  
   var now = Date.now();
   var idea = new Idea({
     createdAt    : now,
@@ -93,7 +92,6 @@ function createIdea (req, res) {
     title        : req.body.title,
     body         : req.body.body,
     tags         : req.body.tags || null,
-    rating       : 0,
     active       : true
   });
 
@@ -132,15 +130,61 @@ function findId (pI, callback){
 function getComments (req, res) {
   var parentId = JSON.parse(req.headers.data);
 
-  Idea.findById(parentId)
-    .populate('comments')
-    .exec(function(err, idea) {
-      if (err) console.log('populate ERR', err);
-      else {
-        res.end(JSON.stringify(idea.comments));
-      }
-    });
-} // end getComments
+  var ideaId = JSON.parse(req.headers.data);
+/////////5 levl nesting////////////////
+  Idea.findById(ideaId).lean()
+    .populate('comments').exec(function (err, idea) {
+      if(err){console.log(err);}
+      var opts = {
+          path: 'comments.comments'
+      };
+      Comment.populate(idea, opts, function(err, docs) {
+      var opts = {
+          path: 'comments.comments.comments'
+      };
+        Comment.populate(idea, opts, function(err, docs) {
+          var opts = {
+            path: 'comments.comments.comments.comments'
+          };
+          Comment.populate(idea, opts, function(err, docs) {
+            result = 
+            res.end(JSON.stringify( [docs]));
+          });
+
+        });
+      });
+  });
+  ///////////////////Infinite nested comments/////////////
+  // Idea.findById(ideaId)
+  //   .exec(function(err, idea) {
+  //     if (err) console.log('populate ERR', err);
+  //     else {         
+
+  //       function commentarray (array){
+  //         return  array.map(function(singlecomment){
+  //             return fillcomments(singlecomment)
+  //         })
+  //       }
+  //       function fillcomments (fillthis){
+  //         if(fillthis.comments[0]){
+  //             console.log(fillthis)
+  //             fillthis.populate('comments',function(err, result){
+  //               result.comments = commentarray(result.comments) 
+  //               // console.log('the resutl',result)
+  //               return result
+  //             })
+  //         }else{
+  //           return fillthis
+  //         };
+  //       }
+  //   };
+  //    return fillcomments(idea);
+  //   })
+    // .then(function(result){
+    //   console.log(result)
+    //   res.end(JSON.stringify(idea.comments));
+    // });
+}
 
 
 //TODO:
@@ -198,10 +242,99 @@ function createComment (req, res) {
   }); // end of setUserId
 } // end of createComment
 
+
+function downvote (req, res) {
+  var now = Date.now();
+
+  var newDownvote = new Vote({
+    createdAt : now,
+    voter     : req.body.user_name // Slack username
+  });
+
+  if (req.body.type === 'idea') {
+    Idea.find({ shortId: req.body.shortId }, function (err, idea) {
+      idea.voters.map(function (voter) {
+        if (voter === req.body.slackId) {
+          res.status(403).send('Voting only allowed once');
+        }
+      });
+
+      idea.voters.push(req.body.slackId);
+      idea.downvotes.push(newDownvote);
+      idea.rating = idea.upvotes.length - idea.downvotes.length;
+
+      idea.save(function (err) {
+        if (err) console.log(err);
+      });
+    });
+  }
+
+  if (req.body.type === 'comment') {
+    Comment.find({ shortId: req.body.shortId }, function (err, comment) {
+      comment.voters.map(function (voter) {
+        if (voter === req.body.slackId) {
+          res.status(403).send('Voting only allowed once');
+        }
+      });
+
+      comment.voters.push(req.body.slackId);
+      comment.downvotes.push(downvote);
+      comment.rating = comment.upvotes.length - comment.downvotes.length;
+    });
+  }
+
+  res.end();
+} // end downvote
+
+function upvote (req, res) {
+  var now = Date.now();
+
+  var newUpvote = new Vote({
+    createdAt : now,
+    voter     : req.body.user_name // Slack username
+  });
+
+  if (req.body.type === 'idea') {
+    Idea.find({ shortId: req.body.shortId }, function (err, idea) {
+      idea.voters.map(function (voter) {
+        if (voter === req.body.slackId) {
+          res.status(403).send('Voting only allowed once');
+        }
+      });
+
+      idea.voters.push(req.body.slackId);
+      idea.upvotes.push(newUpvote);
+      idea.rating = idea.upvotes.length - idea.downvotes.length;
+
+      idea.save(function (err) {
+        if (err) console.log(err);
+      });
+    });
+  }
+
+  if (req.body.type === 'comment') {
+    Comment.find({ shortId: req.body.shortId }, function (err, comment) {
+      comment.voters.map(function (voter) {
+        if (voter === req.body.slackId) {
+          res.status(403).send('Voting only allowed once');
+        }
+      });
+
+      comment.voters.push(req.body.slackId);
+      comment.upvotes.push(upvote);
+      comment.rating = comment.upvotes.length - comment.downvotes.length;
+    });
+  }
+
+  res.end();
+} // end upvote
+
 // expose functions
 module.exports = {
   getIdeas: getIdeas,
   getComments: getComments,
   createIdea: createIdea,
-  createComment: createComment
+  createComment: createComment,
+  downvote: downvote,
+  upvote: upvote
 };
